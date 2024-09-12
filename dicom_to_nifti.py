@@ -1,5 +1,6 @@
 import os
 import re
+import csv
 import pydicom
 import argparse
 import numpy as np
@@ -45,6 +46,7 @@ def save_as_nifti(pixel_array, dicom_sample, output_path):
 
 
 def main(args):
+    error_case_list = []
     patient_dirs = sorted(glob(f'{args.dicom_dir}/*'), key=lambda x: int(os.path.basename(x)))
     for patient_dir in tqdm(patient_dirs):
         subject_dirs = sorted(glob(f'{patient_dir}/*'), key=lambda x: int(re.search(r'Subject_(\d+)', os.path.basename(x)).group(1)))
@@ -62,12 +64,31 @@ def main(args):
                     nifti_file_name = f'{patient_num}_Subject{subject_num}_Session{session_num}_{case_num}.nii.gz'
                     os.makedirs(f'{args.nifti_dir}/{patient_num}', exist_ok=True)
                     nifti_save_path = f'{args.nifti_dir}/{patient_num}/{nifti_file_name}'
-        
-                    # Convert the DICOM files to a numpy array
-                    pixel_array, dicom_sample = dicom_to_numpy(dicom_file_path_list)
 
-                    # Save the numpy array as a NIfTI file
-                    save_as_nifti(pixel_array, dicom_sample, nifti_save_path)
+                    # if the NIfTI file already exists, skip this case
+                    if os.path.exists(nifti_save_path):
+                        print(f'NIfTI file already exists: {nifti_save_path}')
+                    else:
+                        try:
+                            # Convert the DICOM files to a numpy array
+                            pixel_array, dicom_sample = dicom_to_numpy(dicom_file_path_list)
+
+                            # Save the numpy array as a NIfTI file
+                            save_as_nifti(pixel_array, dicom_sample, nifti_save_path)
+                        except Exception as e:
+                            # Save the error in a text file
+                            error_log_path = 'error_log.txt'
+                            with open(error_log_path, 'a') as f:
+                                f.write(f'Error processing {case_dir}: {str(e)}\n')
+                            error_case_list.append(case_dir)
+    
+    # Save the error case list in csv file
+    error_case_csv_path = 'error_case_list.csv'
+    with open(error_case_csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Case'])
+        for case in error_case_list:
+            writer.writerow([case])
 
 
 if __name__ == '__main__':
