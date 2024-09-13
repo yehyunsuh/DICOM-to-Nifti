@@ -3,9 +3,9 @@ import re
 import csv
 import pydicom
 import argparse
+import subprocess
 import numpy as np
 import nibabel as nib
-
 from glob import glob
 from tqdm import tqdm
 
@@ -42,13 +42,30 @@ def save_as_nifti(pixel_array, dicom_sample, output_path):
 
     # Save the NIfTI image
     nib.save(nifti_img, output_path)
-    print(f'Saved NIfTI file: {output_path}')
 
 
-def main(args):
+def clear_cache():
+    """Clears the Linux filesystem cache (PageCache, Dentries, and Inodes)"""
+    # Sync to ensure all buffers are flushed
+    subprocess.run(['sudo', 'sync'])
+    
+    # Clear PageCache, Dentries, and Inodes
+    subprocess.run(['sudo', 'sh', '-c', 'echo 3 > /proc/sys/vm/drop_caches'])
+    # print("Cleared filesystem cache")
+
+
+def dicom_to_nifti(args):
+    # if error_log.txt already exists, remove it
+    if os.path.exists('error_log.txt'):
+        os.remove('error_log.txt')
+        
+    iterations = 0
     error_case_list = []
     patient_dirs = sorted(glob(f'{args.dicom_dir}/*'), key=lambda x: int(os.path.basename(x)))
+    nifti_before = int(sorted(glob(f'{args.nifti_dir}/*'), key=lambda x: int(os.path.basename(x)))[-1].split('/')[-1])
     for patient_dir in tqdm(patient_dirs):
+        if int(patient_dir.split('/')[-1]) < nifti_before:
+            continue
         subject_dirs = sorted(glob(f'{patient_dir}/*'), key=lambda x: int(re.search(r'Subject_(\d+)', os.path.basename(x)).group(1)))
         for subject_dir in subject_dirs:
             session_dirs = sorted(glob(f'{subject_dir}/*'), key=lambda x: int(re.search(r'Session_(\d+)', os.path.basename(x)).group(1)))
@@ -75,12 +92,23 @@ def main(args):
 
                             # Save the numpy array as a NIfTI file
                             save_as_nifti(pixel_array, dicom_sample, nifti_save_path)
+                            print(f'{iterations+1} Saved NIfTI file: {nifti_save_path}')
+                            del pixel_array, dicom_sample
+                            
+                            # Clear cache after each case processing to free memory
+                            clear_cache()
+                            iterations += 1
+
                         except Exception as e:
                             # Save the error in a text file
+                            print(f'Error processing {case_dir}: {str(e)}')
                             error_log_path = 'error_log.txt'
                             with open(error_log_path, 'a') as f:
                                 f.write(f'Error processing {case_dir}: {str(e)}\n')
                             error_case_list.append(case_dir)
+                    
+                    if iterations == 50:
+                        exit()
     
     # Save the error case list in csv file
     error_case_csv_path = 'error_case_list.csv'
@@ -97,4 +125,4 @@ if __name__ == '__main__':
     parser.add_argument('--nifti_dir', type=str, help='Path to the directory to save NIfTI files')
     args = parser.parse_args()
 
-    main(args)
+    dicom_to_nifti(args)
