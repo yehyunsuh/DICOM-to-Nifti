@@ -1,47 +1,11 @@
 import os
 import re
 import csv
-import pydicom
 import argparse
 import subprocess
-import numpy as np
-import nibabel as nib
+
 from glob import glob
 from tqdm import tqdm
-
-
-# Function to convert DICOM files to a 3D numpy array
-def dicom_to_numpy(dicom_file_paths):
-    # Read the first DICOM file to get metadata and dimensions
-    dicom_sample = pydicom.dcmread(dicom_file_paths[0])
-    
-    # Get image dimensions from the DICOM file
-    dimensions = (int(dicom_sample.Rows), int(dicom_sample.Columns), len(dicom_file_paths))
-
-    # Initialize an empty numpy array to hold the pixel data
-    pixel_array = np.zeros(dimensions, dtype=dicom_sample.pixel_array.dtype)
-
-    # Loop through the DICOM files and stack them into the numpy array
-    for i, dicom_file_path in enumerate(dicom_file_paths):
-        dicom = pydicom.dcmread(dicom_file_path)
-        pixel_array[:, :, i] = dicom.pixel_array
-    
-    return pixel_array, dicom_sample
-
-
-# Convert the numpy array to NIfTI and save it as a .nii.gz file
-def save_as_nifti(pixel_array, dicom_sample, output_path):
-    # Convert DICOM affine transformation to NIfTI affine matrix
-    affine = np.eye(4)
-    affine[0, 0] = float(dicom_sample.PixelSpacing[0])
-    affine[1, 1] = float(dicom_sample.PixelSpacing[1])
-    affine[2, 2] = float(dicom_sample.SliceThickness)
-
-    # Create a NIfTI image
-    nifti_img = nib.Nifti1Image(pixel_array, affine)
-
-    # Save the NIfTI image
-    nib.save(nifti_img, output_path)
 
 
 def clear_cache():
@@ -51,7 +15,7 @@ def clear_cache():
     
     # Clear PageCache, Dentries, and Inodes
     subprocess.run(['sudo', 'sh', '-c', 'echo 3 > /proc/sys/vm/drop_caches'])
-    # print("Cleared filesystem cache")
+    print("Cleared filesystem cache")
 
 
 def dicom_to_nifti(args):
@@ -62,7 +26,12 @@ def dicom_to_nifti(args):
     iterations = 0
     error_case_list = []
     patient_dirs = sorted(glob(f'{args.dicom_dir}/*'), key=lambda x: int(os.path.basename(x)))
-    nifti_before = int(sorted(glob(f'{args.nifti_dir}/*'), key=lambda x: int(os.path.basename(x)))[-1].split('/')[-1])
+
+    if len(glob(f'{args.nifti_dir}/*')) == 0:
+        nifti_before = 0
+    else:
+        nifti_before = int(sorted(glob(f'{args.nifti_dir}/*'), key=lambda x: int(os.path.basename(x)))[-1].split('/')[-1])
+
     for patient_dir in tqdm(patient_dirs):
         if int(patient_dir.split('/')[-1]) < nifti_before:
             continue
@@ -72,32 +41,23 @@ def dicom_to_nifti(args):
             for session_dir in session_dirs:
                 case_dirs = sorted(glob(f'{session_dir}/*'))
                 for case_dir in case_dirs:
-                    dicom_file_path_list = sorted(glob(f'{case_dir}/*.dcm'), key=lambda x: int(os.path.basename(x).split('.')[0]))
                     patient_num = patient_dir.split('/')[-1]
                     subject_num = subject_dir.split('/')[-1].split('_')[1]
                     session_num = session_dir.split('/')[-1].split('_')[1]
                     case_num = case_dir.split('/')[-1]
                     
-                    nifti_file_name = f'{patient_num}_Subject{subject_num}_Session{session_num}_{case_num}.nii.gz'
-                    os.makedirs(f'{args.nifti_dir}/{patient_num}', exist_ok=True)
-                    nifti_save_path = f'{args.nifti_dir}/{patient_num}/{nifti_file_name}'
+                    nifti_save_path = f'{args.nifti_dir}/{patient_num}'
+                    os.makedirs(f'{nifti_save_path}', exist_ok=True)
+                    nifti_file_name = f'{patient_num}_Subject{subject_num}_Session{session_num}_{case_num}'
+                    nifti_file_path = f'{nifti_save_path}/{nifti_file_name}.nii.gz'
 
                     # if the NIfTI file already exists, skip this case
-                    if os.path.exists(nifti_save_path):
-                        print(f'NIfTI file already exists: {nifti_save_path}')
+                    if os.path.exists(nifti_file_path):
+                        print(f'NIfTI file already exists: {nifti_file_path}')
                     else:
                         try:
-                            # Convert the DICOM files to a numpy array
-                            pixel_array, dicom_sample = dicom_to_numpy(dicom_file_path_list)
-
-                            # Save the numpy array as a NIfTI file
-                            save_as_nifti(pixel_array, dicom_sample, nifti_save_path)
-                            print(f'{iterations+1} Saved NIfTI file: {nifti_save_path}')
-                            del pixel_array, dicom_sample
-                            
-                            # Clear cache after each case processing to free memory
-                            clear_cache()
                             iterations += 1
+                            subprocess.run(['dcm2niix', '-o', nifti_save_path, '-f', nifti_file_name, '-z', 'y', case_dir])
 
                         except Exception as e:
                             # Save the error in a text file
@@ -108,7 +68,8 @@ def dicom_to_nifti(args):
                             error_case_list.append(case_dir)
                     
                     if iterations == 50:
-                        exit()
+                        # clear_cache()
+                        iterations = 0
     
     # Save the error case list in csv file
     error_case_csv_path = 'error_case_list.csv'
